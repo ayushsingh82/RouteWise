@@ -9,46 +9,50 @@ Problem statement: [`README.md`](./README.md). This plan turns the thesis ("spen
 - [x] COMPETITORS.md — landscape of who else is building model routing / token-cost optimization. Main competitor identified: [Mentlio](./COMPETITORS.md#0-mentlio--main-competitor) (archived docs/benchmarks in [`research/mentlio/`](./research/mentlio/)).
 - [x] Decide product wedge (see "Product wedge options" below) before writing app code.
 
-## Phase 1 — Task decomposition engine
+## Phase 1 — Task decomposition engine ✅ core built
 
 The unit of automation is the task, not the workflow. Before anything can be routed, a workflow needs to be broken into discrete steps.
 
-1. **Workflow ingestion** — accept a workflow definition (a sequence of steps: trigger → actions → branches) from a config file, a trace/log of a past agent run, or a manual step-by-step description.
-2. **Step extraction** — parse/normalize each step into a unit with: inputs, outputs, current implementation (model call vs code), and dependencies on prior steps.
-3. **Task classification** — for each step, tag it as one of:
+1. **Workflow ingestion** ✅ — [`src/lib/workflow/ingest.ts`](./src/lib/workflow/ingest.ts) (`ingestWorkflowTrace`) validates/normalizes a raw workflow definition (config, trace export, or hand-authored) into a `WorkflowTrace`.
+2. **Step extraction** ✅ — [`src/lib/workflow/ingest.ts`](./src/lib/workflow/ingest.ts) (`extractStepsInOrder`) topologically sorts steps by `dependsOn`, detects cycles/dangling deps. Step shape (inputs/outputs/implementation/dependencies) is defined in [`src/lib/workflow/types.ts`](./src/lib/workflow/types.ts).
+3. **Task classification** ✅ — [`src/lib/workflow/classify.ts`](./src/lib/workflow/classify.ts) (`classifyStep`/`classifyTrace`), rules-based for now (see non-goals: prompt-based classification for ambiguous steps is still open):
    - `deterministic` — output is a pure function of input (field match, data move, rule application) → replace with code.
    - `cacheable` — same input has recurred before with a known-correct output → serve from cache.
    - `simple-judgment` — requires interpretation but within a narrow, well-bounded decision space → route to a small/cheap model.
    - `complex-judgment` — ambiguous, high-context, or high-stakes → route to a frontier model or a human.
-4. **Classification signals to use**: input/output cardinality (few discrete outcomes = deterministic candidate), historical output variance for the same input (low variance = cacheable/deterministic), presence of free-text/ambiguous input (judgment candidate), downstream cost of a wrong answer (escalation candidate).
+4. **Classification signals** ✅ (heuristic version) — implementation kind, output cardinality (boolean/enum-like → deterministic candidate), category/mapping keywords → cacheable, high-stakes/risk keywords → complex-judgment, unmatched steps fall back to `complex-judgment` (escalate, don't under-classify). Real historical-output-variance signals need production trace data — open item.
 
-## Phase 2 — Routing layer
+Validated end-to-end against the AP invoice fixture: correctly classifies 2 of the AP workflow's 4 model-call steps (`gl_code_line_item`, `check_approval_threshold`) as downgrade candidates.
 
-1. **Model/resource registry** — a config of available resources: code rules engine, cache store, small models (e.g. Flash-tier), mid models, frontier models, human-in-the-loop queue — each with a cost-per-call and latency profile.
-2. **Router** — given a classified task, pick the cheapest resource with acceptable reliability for that task type. Default distribution to aim for: **90% non-frontier / 9% near-frontier / 1% frontier** (the "90/9/1 split").
-3. **Escalation policy** — escalate up a tier when: confidence score is low, output fails a validation check, or the task is flagged high-cost-of-error. Escalation should be the exception path, not the default.
-4. **Per-task benchmarking** — before wiring a task to a given model tier, benchmark candidate models against a labeled sample of that task's historical inputs/outputs; pick the smallest model that clears the accuracy bar, not the largest available.
+## Phase 2 — Routing layer ✅ core built
 
-## Phase 3 — Caching layer
+1. **Model/resource registry** ✅ — [`src/lib/workflow/pricing.ts`](./src/lib/workflow/pricing.ts): 3-tier pricing config (frontier / near-frontier / non-frontier), illustrative defaults, override with real pricing before trusting absolute $ figures.
+2. **Router** ✅ — [`src/lib/workflow/router.ts`](./src/lib/workflow/router.ts) (`routeStep`/`routeTrace`) maps each classified step to a resource (code / cache / model-tier / human). `summarizeRouting()` reports the **90/9/1-style split** (share of model calls landing on each tier).
+3. **Escalation policy** ✅ — built into the router: below `policy.minConfidence`, a step's default resource is overridden by a safety-net tier (`policy.fallbackTier`) instead of trusted outright. Verified: tightening `minConfidence` to 0.8 correctly escalates `extract_line_items` and `gl_code_line_item`, which sit at 0.7/0.75 confidence.
+4. **Per-task benchmarking** ⬜ open — needs a labeled sample of real task inputs/outputs to benchmark candidate models against; can't be built against synthetic fixtures alone.
 
-1. **Cache key design** — define what "same input" means per task (exact match vs normalized/fuzzy match, e.g. "stapler" → "office supplies" GL code).
-2. **Cache store** — key/value store of input signature → validated output, with confidence/provenance (was this cached value ever human-corrected?).
-3. **Invalidation policy** — rules change, categories get renamed, etc. — cache entries need a TTL or a review trigger, not infinite trust.
-4. **Cache-hit accounting** — every cache hit should be logged as tokens saved, feeding the ROI dashboard (Phase 5).
+## Phase 3 — Caching layer ✅ core built
 
-## Phase 4 — Context/harness minimization
+1. **Cache key design** ✅ — [`src/lib/workflow/cache.ts`](./src/lib/workflow/cache.ts) `defaultCacheKey` (trimmed/lowercased string or JSON.stringify); callers can pass a task-specific `keyFn` (e.g. fuzzy vendor-name matching) to `WorkflowCache`.
+2. **Cache store** ✅ — `WorkflowCache` class: key → value with `provenance` (`"model"` vs `"human-corrected"`), `hitCount`.
+3. **Invalidation policy** ✅ (mechanism, not policy content) — `ttlMs` on `set()`, plus `invalidate()`/`clear()` for manual invalidation (e.g. chart-of-accounts revision). Actual TTL/review-trigger values per task type are still a product decision, not a code one.
+4. **Cache-hit accounting** ✅ — `cacheSavingsUsd(stats, avoidedCostPerCallUsd)` turns `WorkflowCache.stats()` into a dollar figure, feeding Phase 5.
 
-1. **Context scoping per task** — each routed call gets only the fields/documents relevant to that specific decision, not the full workflow history.
-2. **Context templates per task type** — define, per task, the minimal schema of what the model actually needs to see.
-3. **Measure context bloat** — track average input tokens per call per task; flag tasks whose context size is growing without a corresponding accuracy gain.
+## Phase 4 — Context/harness minimization ✅ core built
 
-## Phase 5 — Measurement / ROI dashboard
+1. **Context scoping per task** ✅ — [`src/lib/workflow/context.ts`](./src/lib/workflow/context.ts) `buildScopedContext()`: a step's declared `inputs` *are* its minimal context schema.
+2. **Context templates per task type** ✅ (via the schema) — `WorkflowStep.inputs` is the template; no separate templating layer needed since ingestion already forces steps to declare only what they use.
+3. **Measure context bloat** ✅ — `measureContextBloat()`/`measureTraceContextBloat()` compare scoped-context token cost against a naive full-workflow-history baseline (`buildFullHistoryContext`). On the AP fixture, bloat ratios range **1.6x–22.75x**, growing with position in the workflow — exactly the "don't feed the entire workflow history into every call" waste the source article calls out.
 
-1. **Track ROI on intelligence, not raw spend**: value delivered (task solved, error avoided) per dollar of token spend, per task type.
-2. **Track the 90/9/1 split in practice** — what % of calls are actually landing on non-frontier / near-frontier / frontier, and drift over time.
-3. **Track savings vs. the "everything on frontier" baseline** — the number that produces the ">90% reduction" headline.
-4. **Track cache hit rate** and deterministic-code coverage per workflow, as leading indicators of how "agentic" a workflow actually needs to be.
-5. **Flag workflows still running workflow-level (single frontier model reasoning through everything)** as decomposition candidates.
+## Phase 5 — Measurement / ROI ✅ non-UI core built (dashboard itself is UI — deferred per non-goals)
+
+1. **Track ROI on intelligence, not raw spend** ✅ — [`src/lib/workflow/savings.ts`](./src/lib/workflow/savings.ts) `computeTraceSavings()` prices every step three ways: naive-frontier baseline, actual current spend, and recommended routed spend.
+2. **Track the 90/9/1 split in practice** ✅ — `summarizeRouting()` in `router.ts`.
+3. **Track savings vs. the "everything on frontier" baseline** ✅ — `computeTraceSavings().totals.savingsVsNaiveFrontierPct`. On the AP fixture this comes out to **51.8%**, not 90% — correctly, since `flag_anomaly` legitimately stays frontier-tier and dominates the total. Confirms the non-goal below: the number is computed, not asserted.
+4. **Track cache hit rate and deterministic-code coverage** ✅ — `WorkflowCache.stats().hitRate` + `assessWorkflowHealth().modelStepShare` (below).
+5. **Flag workflows still running workflow-level** ✅ — [`src/lib/workflow/health.ts`](./src/lib/workflow/health.ts) `assessWorkflowHealth()`: flags a trace as a decomposition candidate when >50% of steps are still model calls, or when any step is classified deterministic/cacheable but still implemented as a model call. Correctly flags the AP fixture (44% model-step share, 2 downgradeable steps).
+
+**Still open in Phase 5:** the actual dashboard UI (explicit non-goal until the wedge validates further), and `formatSavingsReport()` in `savings.ts` is currently the only "report" surface (plain text) — matches Wedge A's audit-report deliverable but hasn't been tried against a second, independently-authored trace yet.
 
 ## Product wedge options (decided)
 
@@ -71,10 +75,20 @@ The unit of automation is the task, not the workflow. Before anything can be rou
 - No fine-tuning or training of custom small models — routing across existing hosted models only, initially.
 - No claim of exact "90%" savings without being able to compute it from real trace data — the number is a target/label to validate, not a guarantee to bake in.
 
-## Immediate next steps
+## Immediate next steps — completed batch
 
 1. ~~Write `COMPETITORS.md`.~~ Done.
-2. **First target workflow: AP invoice processing** (receive invoice → extract line items → GL-code each line item → match to PO/approval rules → route for approval/payment). Chosen because: it's the tweet's own worked example (stapler → "office supplies"), it has an obvious mix of deterministic steps (field matching, PO lookups), cacheable steps (repeat vendor/line-item → GL code), and judgment steps (novel/ambiguous line items) — and it's realistic to build a synthetic trace fixture for without needing real customer data yet.
-3. Build the Phase 1 workflow-ingestion schema + step extraction against a synthetic AP-invoice-processing trace fixture.
-4. Build a minimal classifier (rules + prompt-based) for step → `deterministic | cacheable | simple-judgment | complex-judgment`.
-5. Build the savings-estimate calculator (Phase 5.3) since it's the artifact that sells the rest of the product.
+2. ~~Pick first target workflow.~~ Done — AP invoice processing (tweet's own worked example: stapler → "office supplies").
+3. ~~Build Phase 1 workflow ingestion + step extraction against the AP fixture.~~ Done — `types.ts`, `ingest.ts`, `fixtures/ap-invoice-processing.ts`.
+4. ~~Build a minimal classifier.~~ Done (rules-based half) — `classify.ts`. Prompt-based fallback for steps the rules can't confidently classify is still open (see below).
+5. ~~Build the savings-estimate calculator.~~ Done — `savings.ts`, plus the rest of Phases 2–5's non-UI core: `pricing.ts`, `router.ts`, `cache.ts`, `context.ts`, `health.ts`.
+
+All of the above is verified end-to-end via `tsx` smoke tests against the AP invoice fixture (not yet a real test suite — see below) and type-checks clean (`npx tsc --noEmit`).
+
+## Next up
+
+1. **Add a real test suite.** Everything so far has been verified with ad hoc `tsx -e` smoke tests, not committed tests. Add Vitest (or similar) and turn those smoke tests into real unit tests before building more on top — this is the biggest correctness gap right now.
+2. **Second target workflow.** Validate the classifier/router/savings pipeline against a workflow that isn't AP invoicing (e.g. support-ticket triage, or the email-triage example from the source article) to check the heuristics in `classify.ts` generalize instead of being accidentally tuned to one fixture.
+3. **Prompt-based classifier fallback.** `classify.ts` currently defaults unmatched steps to `complex-judgment` (safe, but conservative). Add an LLM-based classification pass for steps the rules don't confidently match, per the original "rules + prompt-based" plan.
+4. **Per-task benchmarking (Phase 2.4).** Needs real labeled input/output samples per task — can't be done against synthetic fixtures.
+5. **Wire Product Wedge A end-to-end**: a CLI or API endpoint that takes a raw trace file, runs ingest → classify → route → savings, and emits `formatSavingsReport()`'s output — the actual shareable audit artifact, still just a library today.
