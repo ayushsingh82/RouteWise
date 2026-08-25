@@ -1,36 +1,113 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# tokenmax
 
-## Getting Started
+A system for cutting LLM token spend by routing every task to the cheapest model/method that can reliably handle it — code where possible, small models where sufficient, cache where repeatable, frontier models only where judgment truly requires it.
 
-First, run the development server:
+See [`PLAN.md`](./PLAN.md) for the build plan.
+
+## Problem statement
+
+Source: https://x.com/vasuman/status/2089436710257959073?s=20
+
+> **Spend Less Tokens**
+>
+> You can cut your token spend by over 90% without using open source models.
+>
+> A year ago, token spend wasn't part of the conversation. I remember folks telling me that the technology was going to 'transform their business', so they weren't all that concerned about what they were spending on tokens. Nowadays it's easy to make fun of token-maxxing, but at the time this was rampant.
+>
+> Fast forward to today, and this has changed quite a bit. AI usage within large companies has gone up dramatically, with token spend alongside it. Productivity has gone up only marginally, and it certainly hasn't translated into the financial returns that most executives hoped for. Now, they want to know why the bill keeps growing, what they should be measuring, and how to bring down the cost of agents without reducing the efficiency gains.
+>
+> For context, I'm the CEO of @varickagents. We build agents for the largest companies on the planet. Our core focus is proving the largest possible efficiency gains for the cheapest possible token spend, and as a result, we've noticed the same patterns surfacing over and over again.
+>
+> Daniel, who runs our FDE team, recently wrote an article about how companies will soon manage token spend the way a trading firm manages capital: moving dollars away from lower-return use cases and reallocating them towards higher-ROI ones. This is more of the financial side. But what about the engineering side?
+>
+> If intelligence is expensive, how do you use as little intelligence as possible, while making sure the intelligence you do use is doing useful work for as cheap as possible? Through this framing, measurements become clear: you ought to track ROI on intelligence, not raw spend, or even spend per employee.
+>
+> Put simply: if $10 of Fable 5 solves 1 hard task, and $10 of Gemini 3.6 Flash solves 100 easy ones, the question becomes how many of your "hard" tasks are actually just bundles of "easy" tasks. Spoiler alert: it's most of them.
+>
+> **FIGURE 1: 1 hard task vs 100 easy tasks**
+>
+> Once you break down a complex workflow into individual steps, you realize most steps when calling models don't need SOTA intelligence at all. Some steps can be deterministic, some can use smaller models, and some outputs can be cached instead of generated again every single time.
+>
+> 90% of your company's token spend never needed to happen in the first place. Spend less tokens.
+>
+> ### Most enterprise workflows are deterministic
+>
+> One thing we started noticing pretty quickly once we went deeper on token spend was that a lot of the workflows people called agentic only needed LLM judgment in a few places, yet teams were using AI for all of it.
+>
+> From the outside, these workflows looked very complicated (writing to multiple systems, different paths the workflow could take, approvals/exceptions). We would look at the complex workflow and determine that we'd need a sophisticated agent with frontier AI to run it.
+>
+> But once we started going through these workflows step by step, we could see that a lot of the work the "agent" was doing was simple and deterministic: checking whether fields matched, moving data from one place to another, or just applying a rule. We realized these trivial tasks can be done with code, which is much cheaper, and we were wasting tokens by running them with expensive intelligence.
+>
+> What we've come to learn is that the number of steps in a workflow and the amount of intelligence required in that workflow are two very different things.
+>
+> Once you separate them out, a lot of enterprise workflows are mostly deterministic, with only a very small number of places where the model really needs to think. Anything deterministic can and should be done in code, meaning the AI in most of these workflows was overkill.
+>
+> **FIGURE 2: Judgement steps vs the entire workflow**
+>
+> ### The workflow is the wrong unit of automation
+>
+> Once we started looking at workflows this way, we realized we had been thinking about the wrong unit of automation.
+>
+> Models are now good enough where you can give them a lot of context and access to a few tools, and let them work through a pretty complicated process on their own. But that also means the model ends up being used in many areas where it wasn't really necessary, and blows through your token budget for seemingly no reason.
+>
+> That's the biggest design mistake we see: automating at the workflow level. Break the workflow down into the individual tasks inside it instead, because each task has a completely different intelligence requirement.
+>
+> Once you know exactly which workflow components require AI and which don't, you can be a lot more granular about where AI gets used, and you end up spending tokens only in the places that require judgment.
+>
+> These are mainly the parts of the workflow where you can't know the right answer ahead of time because it depends on the situation. For example, imagine an agent gets an email. That email might mean different things depending on what the customer was asking. Whenever the answer depends on background context and there's more than one plausible way to handle it, that's where a model becomes useful, because there's an actual judgment call to make.
+>
+> But the next mistake we see is pointing the heaviest frontier model at every task that requires a little bit of judgment. Our methodology is to break the workflow into individual tasks, then benchmark models against each one and use the smallest model that reliably handles it, instead of handing the whole thing to a frontier model in one call. By the end, we have a system that runs Gemini 3.6 Flash where possible and only reaches for Opus where absolutely necessary. The rough distribution is 90% non-frontier, 9% near-frontier, and 1% frontier. We call this the 90/9/1 split. Priced against running everything on frontier, that split is where the 90% at the top of this article comes from.
+>
+> **FIGURE 3: The 90/9/1 split is real**
+>
+> ### The model should become a smaller part of the system
+>
+> Once you assess how much intelligence a step really needs, you begin to realize most steps in a workflow don't need a powerful model. In fact, some steps don't need a model at all.
+>
+> Deterministic steps should be plain code (e.g. if we get an email, we should download its attachments, if it has any). Very plainly: If X, then Y.
+>
+> And simpler reasoning should go to smaller, cheaper models, like Gemini 3.6 Flash (e.g. read the line item on an invoice and if it's a stapler, call an LLM to GL Code it to the right category - in this case 'office supplies').
+>
+> And known outputs can be reused again from cache instead of generated net-new every single time (e.g. every time you read a line item, you should map its GL Code to the cache, so that whenever you see 'stapler' you know it's 'office supplies' without even calling the LLM).
+>
+> **FIGURE 4: The test against every step**
+>
+> ### Make every model call earn its place
+>
+> Start with the workflow as it actually runs today. You'll usually find many places where the outcome can be determined without a model. Those should just become code. If this, then that. You know, the good old-fashioned way.
+>
+> The remainder will be the small areas where judgment is required. Models are necessary there, but the steps don't all need the same amount of intelligence. A smaller model might be completely fine for one step, while another needs something stronger. With these steps, keep a human in the loop when there's a lot of judgment or domain knowledge required, or when the answer is too costly to get wrong.
+>
+> Context is another big area where tokens are being inefficiently spent. The past 2 years of building in applied AI have taught us that the harness around the model has a very big impact on the amount of tokens spent. A good harness prevents the model from being inundated with information that it doesn't need. If the decision comes down to just a few fields and maybe a single document, there's no reason to send the entire history of a workflow per LLM call. Narrow context is also more accurate, since irrelevant information is exactly where models get confused.
+>
+> **FIGURE 5: Don't feed the entire workflow history into every model call**
+>
+> ### TLDR
+>
+> - Many workflows that look agentic from the outside are majority-deterministic once you break them down.
+> - You should rarely, if ever, let one model reason through an entire workflow, as opposed to breaking a workflow down into individual tasks, and then deciding task by task what actually needs a model.
+> - For each task, inspect deeply the amount of judgment that is actually required. If the answer can be known ahead of time, use code. If some judgment is required, use the smallest model that can handle it reliably. If the downside of being wrong is high, escalate to a stronger model or a person.
+> - Keep context as scoped down as possible, and reuse outputs when the same inputs keep showing up via caching.
+> - Long story short: the goal is to spend intelligence sparingly, not just for token spend, but for accuracy as well.
+
+## Core thesis to build against
+
+1. **Workflow → task decomposition.** The task, not the workflow, is the unit of automation.
+2. **Classify every task** as deterministic (code), cacheable (lookup), cheap-model-solvable, or judgment-requiring.
+3. **Route to the cheapest sufficient resource** — the 90/9/1 split (non-frontier / near-frontier / frontier).
+4. **Cache aggressively** on repeated input → output mappings.
+5. **Minimize context per call** — narrow, task-scoped context instead of full workflow history.
+6. **Escalate on cost-of-error**, not by default — human-in-the-loop or a stronger model only when being wrong is expensive.
+7. **Measure ROI on intelligence**, not raw token spend.
+
+## Stack
+
+- [Next.js](https://nextjs.org) (App Router, TypeScript, Tailwind) — scaffolded via `create-next-app`.
+
+## Getting started
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Open [http://localhost:3000](http://localhost:3000).
