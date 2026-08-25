@@ -6,8 +6,8 @@ Problem statement: [`README.md`](./README.md). This plan turns the thesis ("spen
 
 - [x] Repo scaffolded: Next.js (App Router, TS, Tailwind, ESLint).
 - [x] README.md with problem statement + core thesis.
-- [ ] COMPETITORS.md — landscape of who else is building model routing / token-cost optimization.
-- [ ] Decide product wedge (see "Product wedge options" below) before writing app code.
+- [x] COMPETITORS.md — landscape of who else is building model routing / token-cost optimization. Main competitor identified: [Mentlio](./COMPETITORS.md#0-mentlio--main-competitor) (archived docs/benchmarks in [`research/mentlio/`](./research/mentlio/)).
+- [x] Decide product wedge (see "Product wedge options" below) before writing app code.
 
 ## Phase 1 — Task decomposition engine
 
@@ -50,13 +50,20 @@ The unit of automation is the task, not the workflow. Before anything can be rou
 4. **Track cache hit rate** and deterministic-code coverage per workflow, as leading indicators of how "agentic" a workflow actually needs to be.
 5. **Flag workflows still running workflow-level (single frontier model reasoning through everything)** as decomposition candidates.
 
-## Product wedge options (decide before building app UI)
+## Product wedge options (decided)
 
 - **A. Workflow analyzer / audit tool** — ingest an existing agent's trace logs, classify each step, and output a report: "X% of your calls could be code, Y% could be a cheap model, Z% must stay frontier," with estimated $ savings.
 - **B. Routing proxy/gateway** — a drop-in LLM API layer that sits in front of existing agent code, classifies+caches+routes calls automatically (similar shape to an LLM gateway, but decomposition-aware rather than just picking a model per call).
 - **C. Framework/SDK** — a library for building agents where task classification and routing are first-class primitives from day one, instead of retrofitted.
 
-Recommendation: start with **A** (analyzer/audit) — it's the smallest surface area, produces an immediately shareable artifact (the savings report), validates the classification logic against real traces, and can be upsold into B or C later.
+**Decision: start with A (analyzer/audit)** — smallest surface area, produces an immediately shareable artifact (the savings report), validates classification logic against real traces, upsell path into B/C later.
+
+**Scope decision, informed by [Mentlio](./COMPETITORS.md#0-mentlio--main-competitor):** target **general multi-step business workflows** (AP/AR processing, invoice GL-coding, email/ticket triage, approval chains — the exact examples in the source tweet), **not AI-coding-agent sessions**. Mentlio already owns the coding-agent niche cleanly — desktop agent hooked into Claude Code/Codex/Cursor, GitHub/Jira/Linear/Slack integrations, published SWE-Bench Pro/Terminal-Bench benchmarks. Competing there means beating an already-benchmarked incumbent on its home turf. The business-workflow decomposition layer (Phase 1: classify a workflow's *steps*, not a coding session's *turns*, into `deterministic / cacheable / simple-judgment / complex-judgment`) is the gap nobody in the competitor scan has filled. This also matches Varick Agents' own framing (invoices, AP/AR, GL-coding) more directly than a coding-tool wedge would.
+
+**Adopt from Mentlio's execution, regardless of scope difference:**
+- Local-first / privacy-preserving measurement architecture — compute sensitive analysis on-device, upload only derived telemetry (scores, classifications, token counts), never raw prompts/documents. Design this in from the start, not as a retrofit.
+- **Shadow mode** as the rollout mechanism — replay a classification/routing policy against recorded workflow traces before ever letting it act live. This is Wedge A's actual delivery mechanism, not just an MVP shortcut.
+- **Evidence-tiered savings claims** — every savings number ships with its measurement method and honest caveats (benchmark-modeled vs. invoice-verified), the way Mentlio's `savings-methodology.md` does. No "90%" headline without a reproducible artifact behind it.
 
 ## Explicit non-goals (for now)
 
@@ -66,7 +73,8 @@ Recommendation: start with **A** (analyzer/audit) — it's the smallest surface 
 
 ## Immediate next steps
 
-1. Write `COMPETITORS.md`.
-2. Pick a first target workflow (something with real trace/log data available) to validate task classification against.
-3. Build a minimal classifier (rules + prompt-based) for step → `deterministic | cacheable | simple-judgment | complex-judgment`.
-4. Build the savings-estimate calculator (Phase 5.3) since it's the artifact that sells the rest of the product.
+1. ~~Write `COMPETITORS.md`.~~ Done.
+2. **First target workflow: AP invoice processing** (receive invoice → extract line items → GL-code each line item → match to PO/approval rules → route for approval/payment). Chosen because: it's the tweet's own worked example (stapler → "office supplies"), it has an obvious mix of deterministic steps (field matching, PO lookups), cacheable steps (repeat vendor/line-item → GL code), and judgment steps (novel/ambiguous line items) — and it's realistic to build a synthetic trace fixture for without needing real customer data yet.
+3. Build the Phase 1 workflow-ingestion schema + step extraction against a synthetic AP-invoice-processing trace fixture.
+4. Build a minimal classifier (rules + prompt-based) for step → `deterministic | cacheable | simple-judgment | complex-judgment`.
+5. Build the savings-estimate calculator (Phase 5.3) since it's the artifact that sells the rest of the product.
