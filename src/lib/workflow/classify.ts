@@ -74,6 +74,30 @@ export const DEFAULT_RULES: ClassificationRule[] = [
     },
   },
   {
+    // Guards against a real false-negative the content-moderation-queue fixture surfaced:
+    // a step whose description happens to mention a policy/threshold — but only to say a
+    // fixed rule *can't* fully decide the case ("...that a fixed score can't capture",
+    // "weighs context", "case-by-case") — was matching fixed-rule-or-threshold below and
+    // getting classified deterministic at 0.8 confidence purely because its output also
+    // happened to be boolean. That's the dangerous direction: under-classifying a judgment
+    // call as pure code. Runs before fixed-rule-or-threshold so it takes priority whenever
+    // both would otherwise match.
+    name: "context-sensitivity-override",
+    test: (step) => {
+      const hay = `${step.name} ${step.description}`.toLowerCase();
+      if (/can'?t capture|weigh(s|ing)? context|\bnuance\b|case-by-case|\bsubjective\b|cultural context|judgment call/i.test(hay)) {
+        return {
+          classification: "complex-judgment",
+          confidence: 0.7,
+          rationale:
+            "Description explicitly frames this as weighing context a fixed rule/threshold can't fully capture — don't let an incidental 'policy'/'threshold' mention or a boolean output misclassify this as deterministic.",
+          signals: ["keyword:context-override"],
+        };
+      }
+      return null;
+    },
+  },
+  {
     name: "fixed-rule-or-threshold",
     test: (step) => {
       const hay = `${step.name} ${step.description}`.toLowerCase();
