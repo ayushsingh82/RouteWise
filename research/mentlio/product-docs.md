@@ -1,6 +1,6 @@
 # Mentlio — Product Documentation (archived)
 
-Source: mentlio.com/docs, updated July 31, 2026. Archived here as competitor research for tokenmax — see [`../../COMPETITORS.md`](../../COMPETITORS.md).
+Source: mentlio.com/docs, updated July 31, 2026. Archived here as competitor research for RouteWise — see [`../../COMPETITORS.md`](../../COMPETITORS.md).
 
 > Use Mentlio with your engineering team. Set up the desktop agent, understand dashboards and Token Savers, manage integrations, and troubleshoot common issues.
 

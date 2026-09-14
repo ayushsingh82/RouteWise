@@ -1,12 +1,110 @@
-# tokenmax
+# RouteWise
 
-A system for cutting LLM token spend by routing every task to the cheapest model/method that can reliably handle it — code where possible, small models where sufficient, cache where repeatable, frontier models only where judgment truly requires it.
+[![CI](https://github.com/ayushsingh82/tokenmax/actions/workflows/ci.yml/badge.svg)](https://github.com/ayushsingh82/tokenmax/actions/workflows/ci.yml)
 
-See [`PLAN.md`](./PLAN.md) for the build plan.
+**A workflow analyzer that finds out how much of your agent's token spend never needed to happen.**
 
-## Problem statement
+RouteWise decomposes an agentic workflow into its individual steps, classifies each one by how much intelligence it actually requires, and reports what it would cost to route every step to the cheapest resource that can reliably handle it — plain code, a cache lookup, a small model, or a frontier model — instead of running the whole workflow through one frontier model by default.
 
-Source: https://x.com/vasuman/status/2089436710257959073?s=20
+It ships as a library (`src/lib/workflow`) and a CLI (`npm run analyze`) that turns that library into a shareable savings report: the first deliverable of [Product Wedge A](./PLAN.md#product-wedge-options-decided), a workflow audit tool.
+
+## Why this exists
+
+Most workflows that look "agentic" from the outside are majority-deterministic once you break them down. A large share of what gets routed through a frontier model on every call is really a fixed rule, a repeated lookup, or a bounded judgment call a small model could handle — and only a small remainder genuinely needs frontier-level reasoning or a human. RouteWise exists to measure that split for a given workflow instead of asserting it.
+
+See [Background](#background) for the full source article this project is built against.
+
+## How it works
+
+1. **Ingest** a workflow trace (a config file, an agent trace export, or a hand-authored definition) into a normalized, topologically-ordered sequence of steps.
+2. **Classify** each step as `deterministic` (→ code), `cacheable` (→ lookup), `simple-judgment` (→ a small/cheap model), or `complex-judgment` (→ a frontier model or a human) — rules-based by default, with an optional LLM-backed fallback for steps the rules can't confidently place.
+3. **Route** each step to the cheapest resource its classification and confidence justify, escalating to a safer tier when confidence is too low to trust.
+4. **Cache** repeated input → output mappings so identical decisions aren't re-generated.
+5. **Scope context** per step to only its declared inputs, and measure how much larger a naive full-workflow-history payload would have been.
+6. **Report savings**: naive-frontier-baseline cost vs. current spend vs. recommended-routing cost, plus a health check that flags workflows still running mostly through a model.
+
+## Getting started
+
+```bash
+npm install
+npm run dev        # Dashboard at http://localhost:3000
+npm test           # Vitest suite (src/lib/workflow/**, src/app/**)
+```
+
+### Web dashboard
+
+`npm run dev` serves a dashboard (`src/app/page.tsx` + `src/app/api/analyze`) over the same ingest → classify → route → savings → health pipeline as the CLI: pick a built-in fixture, optionally enable the Claude fallback for unconfident steps, and see the savings breakdown, routing split, and step-by-step table render live. It currently only serves the built-in fixtures — uploading a custom trace goes through the CLI below.
+
+### Run the analyzer (CLI)
+
+```bash
+# Against a built-in example workflow
+npm run analyze -- --fixture ap-invoice
+npm run analyze -- --fixture support-ticket-triage
+npm run analyze -- --fixture content-moderation-queue
+
+# Against your own workflow trace
+npm run analyze -- path/to/trace.json
+
+# Machine-readable output
+npm run analyze -- --fixture ap-invoice --json
+
+# Use the Claude API to classify steps the rules can't confidently place
+# (requires ANTHROPIC_API_KEY; falls back to rules-only with a warning if unset)
+npm run analyze -- --fixture ap-invoice --model-fallback
+```
+
+Sample output against the bundled AP invoice fixture:
+
+```
+Savings report — AP Invoice Processing (ap-invoice-processing)
+
+  extract_line_items       simple-judgment    naive=$0.0795 current=$0.0795 recommended=$0.0013
+  gl_code_line_item        cacheable          naive=$0.0270 current=$0.0270 recommended=$0.0001
+  check_approval_threshold deterministic      naive=$0.0069 current=$0.0069 recommended=$0.0000
+  flag_anomaly             complex-judgment   naive=$0.1043 current=$0.1043 recommended=$0.1043
+  ...
+
+Naive single-frontier-model baseline: $0.2194
+Recommended spend:                    $0.1056
+Savings vs. naive frontier baseline:  $0.1137 (51.8%)
+
+Workflow health: DECOMPOSITION CANDIDATE
+  - 2 step(s) classified deterministic/cacheable are still implemented as model calls: gl_code_line_item, check_approval_threshold.
+```
+
+## Project structure
+
+```
+src/
+  app/
+    page.tsx, dashboard.tsx    # Dashboard UI
+    api/analyze/route.ts       # Server-side pipeline endpoint the dashboard calls
+  lib/workflow/
+    types.ts, ingest.ts       # WorkflowTrace ingestion, validation, topological ordering
+    classify.ts                # Rules-based task classifier
+    classify-model.ts          # Provider-agnostic LLM fallback for unmatched steps
+    providers/                 # Concrete model-classifier implementations (Claude API)
+    router.ts, pricing.ts      # Cheapest-sufficient-resource routing + tier pricing
+    cache.ts                   # Input -> output cache with provenance/TTL
+    context.ts                 # Per-step scoped context + bloat measurement
+    savings.ts                 # Naive/current/recommended cost comparison + report formatting
+    health.ts                  # Flags workflows still running mostly through a model
+    fixtures/                  # Example workflows: AP invoicing, support-ticket triage, content moderation
+  cli/analyze.ts                # Product Wedge A: the analyzer CLI
+```
+
+Each module's `*.test.ts` file is its unit test suite (Vitest, `npm test`).
+
+## Status & roadmap
+
+Phases 0–5's non-UI core are built and tested; see [`PLAN.md`](./PLAN.md) for the full phase-by-phase build log, what's still open (per-task benchmarking against real labeled data, real trace ingestion), and the product-wedge decision. [`COMPETITORS.md`](./COMPETITORS.md) has the competitive landscape scan, including the closest comparable product.
+
+## Background
+
+This project is built directly against the following source article:
+
+**Source: [@vasuman on X](https://x.com/vasuman/status/2089436710257959073?s=20)**
 
 > **Spend Less Tokens**
 >
@@ -90,7 +188,7 @@ Source: https://x.com/vasuman/status/2089436710257959073?s=20
 > - Keep context as scoped down as possible, and reuse outputs when the same inputs keep showing up via caching.
 > - Long story short: the goal is to spend intelligence sparingly, not just for token spend, but for accuracy as well.
 
-## Core thesis to build against
+### Core thesis
 
 1. **Workflow → task decomposition.** The task, not the workflow, is the unit of automation.
 2. **Classify every task** as deterministic (code), cacheable (lookup), cheap-model-solvable, or judgment-requiring.
@@ -102,12 +200,4 @@ Source: https://x.com/vasuman/status/2089436710257959073?s=20
 
 ## Stack
 
-- [Next.js](https://nextjs.org) (App Router, TypeScript, Tailwind) — scaffolded via `create-next-app`.
-
-## Getting started
-
-```bash
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000).
+[Next.js](https://nextjs.org) (App Router, TypeScript, Tailwind), [Vitest](https://vitest.dev) + [Testing Library](https://testing-library.com) for the test suite (`src/lib/workflow/**` and `src/app/**`), [`@anthropic-ai/sdk`](https://github.com/anthropics/anthropic-sdk-typescript). CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests, and build on every push/PR to `main`.

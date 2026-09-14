@@ -1,4 +1,4 @@
-# PLAN.md — tokenmax
+# PLAN.md — RouteWise
 
 Problem statement: [`README.md`](./README.md). This plan turns the thesis ("spend intelligence sparingly — code where deterministic, small models where sufficient, cache where repeatable, frontier only where judgment is required") into a buildable system, broken into phases and points.
 
@@ -52,7 +52,7 @@ Validated end-to-end against the AP invoice fixture: correctly classifies 2 of t
 4. **Track cache hit rate and deterministic-code coverage** ✅ — `WorkflowCache.stats().hitRate` + `assessWorkflowHealth().modelStepShare` (below).
 5. **Flag workflows still running workflow-level** ✅ — [`src/lib/workflow/health.ts`](./src/lib/workflow/health.ts) `assessWorkflowHealth()`: flags a trace as a decomposition candidate when >50% of steps are still model calls, or when any step is classified deterministic/cacheable but still implemented as a model call. Correctly flags the AP fixture (44% model-step share, 2 downgradeable steps).
 
-**Still open in Phase 5:** the actual dashboard UI (explicit non-goal until the wedge validates further). `formatSavingsReport()` has now been exercised against a second, independently-authored trace (support-ticket triage) via `src/cli/analyze.ts` — see "Next up — completed batch 2" below — and remains plain-text only; a `--json` output mode is the next natural step if a dashboard or CI check needs to consume it.
+**Dashboard UI** ✅ — built on explicit request, ahead of the original "no UI until the wedge validates further" non-goal: [`src/app/page.tsx`](./src/app/page.tsx) + [`src/app/dashboard.tsx`](./src/app/dashboard.tsx), backed by [`src/app/api/analyze/route.ts`](./src/app/api/analyze/route.ts) (the same ingest → classify → route → savings → health pipeline as the CLI, over HTTP). Fixture switcher, a Claude-fallback toggle, summary stat cards, a 90/9/1-style routing bar, a health banner, and a step-by-step table. Verified end-to-end via `npm run dev` + `curl` against the homepage and `/api/analyze` for all three fixtures (no headless-browser tool was available in this environment, so this was checked via server-rendered HTML + API responses, not a visual screenshot). Only serves the built-in fixtures for now — uploading a custom trace still goes through the CLI.
 
 ## Product wedge options (decided)
 
@@ -105,9 +105,19 @@ All of the above is verified end-to-end via a real Vitest suite (`npm run test`,
 4. **Real trace ingestion.** Still open — everything validated so far is against hand-authored fixtures (now three, spanning invoice processing, ticket triage, and content moderation). The actual product wedge needs a real (anonymized/synthetic-but-realistic) customer trace to validate against — also a prerequisite for #2.
 5. ~~CLI output formats.~~ Done — `npm run analyze -- ... --json` emits a machine-readable report (classifications, routing decisions, health, full savings breakdown) instead of the plain-text one, for a future dashboard or CI check to consume without re-parsing text.
 
+## Next up — completed batch 4
+
+1. ~~Fix the two documented blind spots in `outputLooksLikeSmallEnum`.~~ Done — `classify.ts`: `outputLooksLikeSmallEnum` now also recognizes a small plain-object output (≤4 fields, all short strings/booleans), which correctly moves `decide_action` from a coincidental `cacheable` (via an unrelated "category" keyword collision) to the higher-confidence, correctly-reasoned `deterministic` path. Deliberately did **not** extend it to bare numbers — a numeric score is a judgment call about *what* the number should be, not a rule lookup. Instead added a new `bounded-scoring-rubric` rule (numeric output + "score"/"rating"/"rubric" language + a bounded-scale mention, e.g. "0-100") that correctly classifies `score_toxicity` as `simple-judgment` instead of falling to the conservative default. Both regression-tested in `classify.test.ts` and `content-moderation-queue.test.ts`; no regressions on the other two fixtures.
+2. **Fire the Anthropic model-fallback against a real trace.** Still blocked — needs an `ANTHROPIC_API_KEY` in this environment.
+3. **Per-task benchmarking (Phase 2.4)** and **real trace ingestion.** Still blocked — both need a real (or realistic anonymized) customer workflow trace.
+4. ~~CLI `--json` consumer.~~ Superseded — done bigger than planned: a full dashboard UI now consumes the pipeline over HTTP (see "Dashboard UI" under Phase 5 above) rather than just a JSON-output CLI flag being read by something.
+5. ~~Test coverage for the API route + dashboard.~~ Done — [`src/app/api/analyze/route.test.ts`](./src/app/api/analyze/route.test.ts) (10 tests, GET+POST, both directly against the route handlers — no server needed) and [`src/app/dashboard.test.tsx`](./src/app/dashboard.test.tsx) (8 tests, `@testing-library/react` + jsdom, mocked `fetch`). `vitest.config.ts` now aliases `@/*` (Vite doesn't read `tsconfig.json` paths on its own) and matches `*.test.tsx`.
+6. ~~Custom trace upload in the dashboard.~~ Done — `POST /api/analyze` accepts `{ trace, modelFallback? }` and runs the same pipeline as `GET` after `ingestWorkflowTrace` validation; the dashboard has an "Upload trace…" control (client-side JSON parse for immediate feedback, server-side `ingestWorkflowTrace` validation for the real check) alongside the three built-in fixture buttons.
+7. ~~CI.~~ Done — [`.github/workflows/ci.yml`](./.github/workflows/ci.yml): lint, `tsc --noEmit`, `npm test`, `npm run build` on every push/PR to `main`. Badge in README.
+
 ## Next up
 
-1. **Fix the two documented blind spots in `outputLooksLikeSmallEnum`** (found by the content-moderation-queue fixture): recognize a bounded numeric range (not just boolean/small-enum strings) as threshold-shaped, and stop `categorization-or-mapping`'s regex from firing on an incidental "category"/"map" mention in prose that isn't actually about what the step does.
-2. **Fire the Anthropic model-fallback against a real trace** once an `ANTHROPIC_API_KEY` is available in this environment — validate `providers/anthropic-classifier.ts` end-to-end (not just against the mocked SDK response shape), and record actual classification quality/cost, not just that it type-checks.
-3. **Per-task benchmarking (Phase 2.4)** and **real trace ingestion** — both still blocked on the same thing: a real (or realistic anonymized) customer workflow trace. Worth treating as one unblock rather than two separate items.
-4. **CLI `--json` consumer.** Nothing reads the JSON output yet — the natural next step is either a minimal dashboard or a CI check (e.g. "fail if `isDecompositionCandidate`") that consumes it, to prove the machine-readable format is actually useful and not just plausible.
+1. **Fire the Anthropic model-fallback against a real trace** once an `ANTHROPIC_API_KEY` is available — validate `providers/anthropic-classifier.ts` end-to-end (not just against the mocked SDK response shape), and record actual classification quality/cost.
+2. **Per-task benchmarking (Phase 2.4) and real trace ingestion** — both still blocked on a real (or realistic anonymized) customer workflow trace.
+3. **A LICENSE file** — none exists yet; needed before treating this as a shareable/open-source artifact.
+4. **Dashboard error boundary / empty states** — the dashboard currently assumes every response is well-formed; a truly malformed `/api/analyze` response (not just an `{error}` body) isn't handled gracefully.

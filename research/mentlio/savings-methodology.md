@@ -1,6 +1,6 @@
 # Mentlio — How Mentlio Measures Token-Saver Savings (archived)
 
-Source: mentlio.com blog, by Ahmet Demirbas, July 2026. "Benchmark-modeled tier · independent review pending." Archived as competitor research for tokenmax — see [`../../COMPETITORS.md`](../../COMPETITORS.md).
+Source: mentlio.com blog, by Ahmet Demirbas, July 2026. "Benchmark-modeled tier · independent review pending." Archived as competitor research for RouteWise — see [`../../COMPETITORS.md`](../../COMPETITORS.md).
 
 > Every savings number on the dashboard is a modeled estimate tied to a pinned benchmark artifact. This page states exactly what each saver measures, how the estimate is computed, and what it does not claim.
 

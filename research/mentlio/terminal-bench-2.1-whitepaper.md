@@ -1,6 +1,6 @@
 # Mentlio — Routing in the Fable Era: Frontier Quality Without the Frontier Tax (archived)
 
-Source: mentlio.com blog ("Mentlio Route benchmark" / referenced sitewide as the "Terminal-Bench 2.1 whitepaper"), by Ahmet Demirbas, July 2026, 7 min read. Archived as competitor research for tokenmax — see [`../../COMPETITORS.md`](../../COMPETITORS.md).
+Source: mentlio.com blog ("Mentlio Route benchmark" / referenced sitewide as the "Terminal-Bench 2.1 whitepaper"), by Ahmet Demirbas, July 2026, 7 min read. Archived as competitor research for RouteWise — see [`../../COMPETITORS.md`](../../COMPETITORS.md).
 
 > On the same SWE-Bench Pro replay, Mentlio Route kept 96.32% route sufficiency and reduced average model cost by 20.66% compared with Always Fable.
 
