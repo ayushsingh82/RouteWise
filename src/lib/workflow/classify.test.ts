@@ -62,6 +62,60 @@ describe("classifyStep", () => {
     expect(result.confidence).toBeLessThan(0.5);
     expect(result.signals).toContain("fallback:no-rule-matched");
   });
+
+  it("does not classify a judgment call as deterministic just because it mentions a threshold it explicitly can't rely on", () => {
+    const result = classifyStep(
+      step({
+        name: "assess_borderline_context",
+        description: "Weigh context (satire, cultural context) that a fixed score can't capture",
+        outputs: [{ name: "context_assessment.override", value: false }],
+      }),
+    );
+    expect(result.classification).toBe("complex-judgment");
+    expect(result.signals).toContain("keyword:context-override");
+  });
+
+  it("classifies a bounded numeric rubric score as simple-judgment, not deterministic", () => {
+    const result = classifyStep(
+      step({
+        name: "score_toxicity",
+        description: "Score the post against a fixed policy threshold table (0-100 toxicity scale)",
+        outputs: [{ name: "toxicity.score", value: 42 }],
+      }),
+    );
+    expect(result.classification).toBe("simple-judgment");
+    expect(result.signals).toContain("keyword:bounded-scoring-rubric");
+  });
+
+  it("does not treat an arbitrary number without rubric/scale language as a bounded score", () => {
+    const result = classifyStep(
+      step({ name: "count_items", description: "Count the number of line items on the invoice", outputs: [{ name: "count", value: 3 }] }),
+    );
+    expect(result.classification).not.toBe("simple-judgment");
+  });
+
+  it("classifies a fixed policy-table lookup with a small nested-object output as deterministic", () => {
+    const result = classifyStep(
+      step({
+        name: "decide_action",
+        description: "Apply the fixed policy decision table to decide the action and reason",
+        outputs: [{ name: "moderation.decision", value: { action: "allow", reason: "below_threshold" } }],
+      }),
+    );
+    expect(result.classification).toBe("deterministic");
+    expect(result.signals).toEqual(expect.arrayContaining(["keyword:policy-or-threshold", "output:small-enum"]));
+  });
+
+  it("does not treat a large or deeply-valued object as a small-enum output", () => {
+    const result = classifyStep(
+      step({
+        name: "apply_policy",
+        description: "Apply the fixed policy threshold table",
+        outputs: [{ name: "decision", value: { action: "allow", reason: "ok", note: "x", extra: "y", fifth: "z" } }],
+      }),
+    );
+    expect(result.classification).not.toBe("deterministic");
+  });
 });
 
 describe("classifyTrace / summarizeClassification against the AP fixture", () => {

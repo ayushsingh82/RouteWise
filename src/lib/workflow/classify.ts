@@ -17,8 +17,31 @@ export interface ClassificationRule {
 
 const BOOLEAN_LIKE = /^(true|false|matched|not_matched|not_duplicate|duplicate|approved|rejected|pending)$/i;
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * True for a boolean, a BOOLEAN_LIKE string, or a small object whose own
+ * fields are all short strings/booleans (e.g. `{action: "allow", reason:
+ * "below_threshold"}`) — a fixed policy-table lookup's output shape. Content
+ * moderation's `decide_action` step surfaced the object case: without it, a
+ * pure lookup-table result fell through to a weaker, coincidentally-matched
+ * classification instead of the higher-confidence deterministic one below.
+ * Deliberately does NOT treat a bare number as small-enum — a numeric score
+ * (e.g. a 0-100 toxicity rating) is a judgment call about *what* the number
+ * should be, not a rule lookup; see the "bounded-scoring-rubric" rule below.
+ */
 function outputLooksLikeSmallEnum(step: WorkflowStep): boolean {
-  return step.outputs.some((o) => typeof o.value === "boolean" || (typeof o.value === "string" && BOOLEAN_LIKE.test(o.value)));
+  return step.outputs.some((o) => {
+    if (typeof o.value === "boolean") return true;
+    if (typeof o.value === "string") return BOOLEAN_LIKE.test(o.value);
+    if (isPlainObject(o.value)) {
+      const values = Object.values(o.value);
+      return values.length > 0 && values.length <= 4 && values.every((v) => typeof v === "boolean" || (typeof v === "string" && v.length <= 40));
+    }
+    return false;
+  });
 }
 
 /**
@@ -92,6 +115,32 @@ export const DEFAULT_RULES: ClassificationRule[] = [
           rationale:
             "Description explicitly frames this as weighing context a fixed rule/threshold can't fully capture — don't let an incidental 'policy'/'threshold' mention or a boolean output misclassify this as deterministic.",
           signals: ["keyword:context-override"],
+        };
+      }
+      return null;
+    },
+  },
+  {
+    // Documented gap the content-moderation-queue fixture found: a step that assigns a
+    // numeric score against a bounded rubric (e.g. a 0-100 toxicity rating) mentions
+    // "threshold"/"policy" in its description too — but the score itself is a judgment
+    // call (how toxic *is* this?), not a rule lookup, so it must not match
+    // fixed-rule-or-threshold below. Left unmatched, it previously fell all the way to
+    // the conservative complex-judgment default — safe, but real missed savings for a
+    // task a small model handles fine. Runs before fixed-rule-or-threshold.
+    name: "bounded-scoring-rubric",
+    test: (step) => {
+      const hay = `${step.name} ${step.description}`.toLowerCase();
+      const scoringLanguage = /\bscore\b|\brating\b|\brubric\b/i.test(hay);
+      const boundedScale = /\b\d+\s*-\s*\d+\b|\bscale of\b|\b0\s*to\s*100\b/i.test(hay);
+      const numericOutput = step.outputs.some((o) => typeof o.value === "number");
+      if (scoringLanguage && boundedScale && numericOutput) {
+        return {
+          classification: "simple-judgment",
+          confidence: 0.65,
+          rationale:
+            "Assigns a numeric score against a bounded, well-defined rubric/scale — the score itself requires interpretation (so it's not a rule lookup), but the decision space is narrow enough for a small model, not a frontier one.",
+          signals: ["keyword:bounded-scoring-rubric"],
         };
       }
       return null;

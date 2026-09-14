@@ -11,8 +11,9 @@ import { contentModerationQueueTrace } from "./content-moderation-queue";
  * to stress `classify.ts`'s output-shape heuristics — a numeric (non-boolean)
  * threshold score, a nested multi-field decision object, and a step whose
  * description mentions "policy"/"threshold" only to explain why a fixed rule
- * *doesn't* apply. See `classify.ts`'s "context-sensitivity-override" rule,
- * added in response to what this fixture found.
+ * *doesn't* apply. All three found real gaps, each now fixed in classify.ts:
+ * "context-sensitivity-override", "bounded-scoring-rubric", and the
+ * small-object case in `outputLooksLikeSmallEnum`, respectively.
  */
 describe("pipeline against the content-moderation-queue fixture", () => {
   it("ingests and topologically orders cleanly", () => {
@@ -34,29 +35,28 @@ describe("pipeline against the content-moderation-queue fixture", () => {
     expect(step.signals).toContain("keyword:context-override");
   });
 
-  it("documents a blind spot: a numeric (non-boolean) threshold score falls through every rule to the safe default", () => {
-    // score_toxicity is a textbook fixed-threshold rule (a 0-100 rubric score), but
-    // outputLooksLikeSmallEnum only recognizes boolean/BOOLEAN_LIKE-string outputs, so
-    // the fixed-rule-or-threshold rule never fires here. Falls to the conservative
-    // default instead of being caught as deterministic or even simple-judgment —
-    // safe, but real missed savings; a future rule could special-case bounded numeric
-    // ranges the way outputLooksLikeSmallEnum does booleans.
+  it("regression: a numeric threshold score gets caught by bounded-scoring-rubric instead of falling to the safe default", () => {
+    // score_toxicity assigns a 0-100 rubric score -- a judgment call about *what* the
+    // score should be, not a rule lookup, so it must land on simple-judgment (a small
+    // model), never deterministic. Before the bounded-scoring-rubric rule existed, this
+    // fell all the way to the conservative complex-judgment default: safe, but real
+    // missed savings for a task well within a small model's reach.
     const classifications = classifyTrace(contentModerationQueueTrace);
     const step = classifications.find((c) => c.stepId === "score_toxicity")!;
-    expect(step.classification).toBe("complex-judgment");
-    expect(step.signals).toContain("fallback:no-rule-matched");
+    expect(step.classification).toBe("simple-judgment");
+    expect(step.signals).toContain("keyword:bounded-scoring-rubric");
   });
 
-  it("documents a blind spot: a nested multi-field decision object also evades the small-enum output check", () => {
-    // decide_action is a pure policy-table lookup (score x category -> {action, reason}),
-    // but its object-shaped output means outputLooksLikeSmallEnum can't recognize it as
-    // deterministic either. It still gets classified cacheable, but via an unrelated
-    // keyword collision ("content category" in the prose, not what the step does) rather
-    // than the correct, higher-confidence deterministic path.
+  it("regression: a nested multi-field decision object is now recognized as a small-enum output", () => {
+    // decide_action is a pure policy-table lookup (score x category -> {action, reason}).
+    // Before outputLooksLikeSmallEnum recognized small object outputs, this fell through
+    // fixed-rule-or-threshold and got classified cacheable via an unrelated keyword
+    // collision ("content category" in the prose, not what the step does) instead of the
+    // correct, higher-confidence deterministic path.
     const classifications = classifyTrace(contentModerationQueueTrace);
     const step = classifications.find((c) => c.stepId === "decide_action")!;
-    expect(step.classification).toBe("cacheable");
-    expect(step.signals).toContain("keyword:categorization");
+    expect(step.classification).toBe("deterministic");
+    expect(step.signals).toEqual(expect.arrayContaining(["keyword:policy-or-threshold", "output:small-enum"]));
   });
 
   it("flags the trace as a decomposition candidate", () => {
