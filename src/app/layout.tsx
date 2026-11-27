@@ -13,8 +13,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "RouteWise",
-  description: "Decompose a workflow into tasks and route each one to the cheapest resource that can reliably handle it.",
+  title: { default: "RouteWise — find the LLM spend that never needed a frontier model", template: "%s · RouteWise" },
+  description: "Break agent traffic into tasks, replay a cache-and-route policy over your real traces, and see savings tagged by how well they're proven.",
+  openGraph: {
+    title: "RouteWise",
+    description: "Find the LLM spend that never needed a frontier model — and prove it before you change anything.",
+    type: "website",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

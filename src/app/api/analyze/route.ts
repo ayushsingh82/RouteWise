@@ -5,26 +5,20 @@ import { createAnthropicClassifier } from "@/lib/workflow/providers/anthropic-cl
 import { routeTrace, summarizeRouting } from "@/lib/workflow/router";
 import { assessWorkflowHealth } from "@/lib/workflow/health";
 import { computeTraceSavings } from "@/lib/workflow/savings";
-import { ingestWorkflowTrace, WorkflowIngestError } from "@/lib/workflow/ingest";
-import { apInvoiceProcessingTrace } from "@/lib/workflow/fixtures/ap-invoice-processing";
-import { supportTicketTriageTrace } from "@/lib/workflow/fixtures/support-ticket-triage";
-import { contentModerationQueueTrace } from "@/lib/workflow/fixtures/content-moderation-queue";
-import type { WorkflowTrace } from "@/lib/workflow/types";
+import { AnalysisInputError, FIXTURES, SAMPLES, resolveSource, sourceFromBody, sourceFromParams, type ResolvedSource } from "@/lib/analysis/sources";
+import { evidenceFor } from "@/lib/analysis/evidence";
 
 /**
  * Server-side counterpart to `src/cli/analyze.ts` (Product Wedge A) — same
  * ingest -> classify -> route -> savings -> health pipeline, exposed over
- * HTTP so the dashboard in `src/app/page.tsx` can render it. GET serves a
- * built-in fixture; POST runs the same pipeline against an uploaded trace.
+ * HTTP so the dashboard can render it, plus an evidence-tiered report
+ * (modeled / benchmarked / replayed / measured / verified). GET serves a
+ * built-in fixture or bundled sample dataset; POST runs the pipeline against
+ * an uploaded workflow trace (`{trace}`) or a raw tool export (`{raw}`).
  */
 
-const BUILTIN_FIXTURES: Record<string, WorkflowTrace> = {
-  "ap-invoice": apInvoiceProcessingTrace,
-  "support-ticket-triage": supportTicketTriageTrace,
-  "content-moderation-queue": contentModerationQueueTrace,
-};
-
-async function runPipeline(trace: WorkflowTrace, modelFallbackRequested: boolean) {
+async function runPipeline(resolved: ResolvedSource, modelFallbackRequested: boolean) {
+  const { trace } = resolved;
   const hasApiKey = Boolean(process.env.ANTHROPIC_API_KEY);
   const usedModelFallback = modelFallbackRequested && hasApiKey;
 
@@ -37,12 +31,14 @@ async function runPipeline(trace: WorkflowTrace, modelFallbackRequested: boolean
   const routingSummary = summarizeRouting(decisions);
   const health = assessWorkflowHealth(trace, classifications);
   const savings = computeTraceSavings(trace, classifications);
+  const evidence = await evidenceFor(resolved, { classifications, savings });
 
   return {
     traceId: trace.id,
     traceName: trace.name,
     traceDescription: trace.description,
-    fixtures: Object.keys(BUILTIN_FIXTURES),
+    fixtures: Object.keys(FIXTURES),
+    samples: SAMPLES,
     modelFallback: { requested: modelFallbackRequested, used: usedModelFallback, apiKeyConfigured: hasApiKey },
     classifications,
     classificationSummary,
@@ -50,26 +46,33 @@ async function runPipeline(trace: WorkflowTrace, modelFallbackRequested: boolean
     routingSummary,
     health,
     savings,
+    evidence,
+    ingest: resolved.calls
+      ? { format: resolved.sourceFormat, calls: resolved.calls.length, models: [...new Set(resolved.calls.map((c) => c.model))], anonymization: resolved.anonymization ?? null }
+      : null,
   };
 }
 
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const fixtureName = searchParams.get("fixture") ?? "ap-invoice";
-  const modelFallbackRequested = searchParams.get("modelFallback") === "true";
-
-  const trace = BUILTIN_FIXTURES[fixtureName];
-  if (!trace) {
-    return NextResponse.json(
-      { error: `Unknown fixture "${fixtureName}". Available: ${Object.keys(BUILTIN_FIXTURES).join(", ")}` },
-      { status: 400 },
-    );
-  }
-
-  return NextResponse.json(await runPipeline(trace, modelFallbackRequested));
+function badRequest(err: unknown) {
+  if (err instanceof AnalysisInputError) return NextResponse.json({ error: err.message }, { status: 400 });
+  throw err;
 }
 
-/** Runs the pipeline against an uploaded trace: `{ trace: <raw JSON>, modelFallback?: boolean }`. */
+// Replaying a recorded trace and rendering a PDF are CPU work; give them headroom on serverless.
+export const runtime = "nodejs";
+export const maxDuration = 30;
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const modelFallbackRequested = searchParams.get("modelFallback") === "true";
+  try {
+    return NextResponse.json(await runPipeline(resolveSource(sourceFromParams(searchParams)), modelFallbackRequested));
+  } catch (err) {
+    return badRequest(err);
+  }
+}
+
+/** Runs the pipeline against an upload: `{ trace }` or `{ raw, format?, anonymize?, terms? }`, plus `modelFallback?`. */
 export async function POST(request: Request) {
   let body: unknown;
   try {
@@ -78,21 +81,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
   }
 
-  if (typeof body !== "object" || body === null || !("trace" in body)) {
-    return NextResponse.json({ error: 'Request body must be an object with a "trace" field.' }, { status: 400 });
-  }
-
-  const { trace: rawTrace, modelFallback } = body as { trace: unknown; modelFallback?: boolean };
-
-  let trace: WorkflowTrace;
   try {
-    trace = ingestWorkflowTrace(rawTrace);
+    const modelFallback = typeof body === "object" && body !== null && (body as { modelFallback?: unknown }).modelFallback === true;
+    return NextResponse.json(await runPipeline(resolveSource(sourceFromBody(body)), modelFallback));
   } catch (err) {
-    if (err instanceof WorkflowIngestError) {
-      return NextResponse.json({ error: `Invalid workflow trace: ${err.message}` }, { status: 400 });
-    }
-    throw err;
+    return badRequest(err);
   }
-
-  return NextResponse.json(await runPipeline(trace, modelFallback === true));
 }

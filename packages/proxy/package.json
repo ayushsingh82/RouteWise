@@ -1,0 +1,17 @@
+{
+  "name": "routewise-proxy",
+  "version": "0.1.0",
+  "description": "Drop-in OpenAI/Anthropic-compatible proxy that classifies, caches and routes LLM calls, with shadow mode to prove savings before acting.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": { "routewise-proxy": "dist/cli.js" },
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=18" },
+  "keywords": ["llm", "proxy", "openai", "anthropic", "cache", "router", "cost", "tokens"],
+  "scripts": {
+    "build": "tsup"
+  }
+}

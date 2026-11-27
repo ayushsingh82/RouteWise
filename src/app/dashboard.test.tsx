@@ -32,6 +32,7 @@ const AP_INVOICE_RESPONSE = {
 
 describe("Dashboard", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(AP_INVOICE_RESPONSE)));
   });
 
@@ -85,6 +86,18 @@ describe("Dashboard", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ error: "boom" }, false)));
     render(<Dashboard />);
     await waitFor(() => expect(screen.getByText("boom")).toBeInTheDocument());
+  });
+
+  it("shows a readable error when the response is not JSON", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 502, json: () => Promise.reject(new SyntaxError("Unexpected token <")) }));
+    render(<Dashboard />);
+    expect(await screen.findByText(/unreadable response \(HTTP 502\)/)).toBeInTheDocument();
+  });
+
+  it("shows an error instead of crashing when a 200 response is missing fields", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ traceName: "x" })));
+    render(<Dashboard />);
+    expect(await screen.findByText(/missing expected fields/)).toBeInTheDocument();
   });
 
   it("uploads a custom trace file and POSTs it to the API", async () => {

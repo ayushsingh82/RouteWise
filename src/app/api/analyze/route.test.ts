@@ -98,3 +98,32 @@ describe("POST /api/analyze", () => {
     expect(body.modelFallback.requested).toBe(false);
   });
 });
+
+describe("evidence-aware /api/analyze", () => {
+  it("includes a modeled-only evidence report for fixtures", async () => {
+    const body = await (await GET(req("?fixture=ap-invoice"))).json();
+    expect(body.evidence.totals.headlineTier).toBe("modeled");
+    expect(body.ingest).toBeNull();
+  });
+
+  it("serves a bundled sample dataset with replay evidence and anonymization stats", async () => {
+    const body = await (await GET(req("?sample=langsmith-support-ops"))).json();
+    expect(body.ingest.format).toBe("langsmith");
+    expect(body.ingest.anonymization.total).toBeGreaterThan(0);
+    expect(body.evidence.totals.evidenceBackedShare).toBeGreaterThan(0);
+    expect(body.samples.length).toBe(5);
+  });
+
+  it("accepts a raw tool export via POST and detects its format", async () => {
+    const { renderCodex, generateCodingCalls } = await import("@/lib/ingest/sample-data");
+    const raw = renderCodex(generateCodingCalls({ provider: "openai" }));
+    const res = await POST(postReq({ raw }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).ingest.format).toBe("codex");
+  });
+
+  it("400s on an unrecognized raw export and on an unknown sample", async () => {
+    expect((await POST(postReq({ raw: '{"hello":1}' }))).status).toBe(400);
+    expect((await GET(req("?sample=nope"))).status).toBe(400);
+  });
+});
