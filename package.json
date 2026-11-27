@@ -12,7 +12,7 @@
     "test:watch": "vitest",
     "analyze": "tsx src/cli/analyze.ts",
     "rw": "tsx src/cli/rw.ts",
-    "build:proxy": "tsup --config packages/proxy/tsup.config.ts"
+    "build:proxy": "cd packages/proxy && tsup"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
