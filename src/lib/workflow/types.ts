@@ -30,6 +30,22 @@ export interface StepObservedCost {
   usdCost?: number;
 }
 
+/**
+ * Statistics observed across many real calls of one task. Only present when
+ * a trace was built from recorded production traffic (see src/lib/ingest);
+ * hand-authored fixtures leave it undefined. This is the "historical output
+ * variance" signal PLAN.md Phase 1.4 listed as an open item.
+ */
+export interface StepObservedStats {
+  callCount: number;
+  /** Fraction of calls whose (normalized) input had already appeared earlier in the trace. 0-1. */
+  repeatInputRate: number;
+  /** Of the calls with a repeated input, the fraction that produced the same output as the first time. 0-1 (1 when there were no repeats to compare). */
+  repeatOutputConsistency: number;
+  uniqueOutputCount: number;
+  meanOutputTokens: number;
+}
+
 export interface WorkflowStep {
   /** Stable id within the trace; referenced by other steps' dependsOn. */
   id: string;
@@ -45,6 +61,8 @@ export interface WorkflowStep {
   dependsOn: string[];
   /** Observed token/cost footprint of this step as currently implemented, if known. */
   observedCost?: StepObservedCost;
+  /** Aggregate statistics over the recorded calls this step represents, if built from real traffic. */
+  observedStats?: StepObservedStats;
 }
 
 export interface WorkflowTrace {

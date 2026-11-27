@@ -121,6 +121,44 @@ export const DEFAULT_RULES: ClassificationRule[] = [
     },
   },
   {
+    // Real-traffic signal (PLAN.md Phase 1.4's "historical output variance"): when a task's
+    // recorded calls keep repeating the same input and keep getting the same output, the
+    // answer is a lookup, whatever the prompt wording says. Requires enough calls to mean
+    // something and near-perfect output consistency — one divergent repeat means the model
+    // is doing real work and the cache could serve a wrong answer.
+    name: "observed-repeat-input",
+    test: (step) => {
+      const s = step.observedStats;
+      if (s && s.callCount >= 8 && s.repeatInputRate >= 0.4 && s.repeatOutputConsistency >= 0.95) {
+        return {
+          classification: "cacheable",
+          confidence: 0.85,
+          rationale: `${(s.repeatInputRate * 100).toFixed(0)}% of ${s.callCount} recorded calls repeated an earlier input, and ${(s.repeatOutputConsistency * 100).toFixed(0)}% of those repeats produced the identical output — serve from cache.`,
+          signals: ["observed:repeat-input", "observed:consistent-output"],
+        };
+      }
+      return null;
+    },
+  },
+  {
+    // Real-traffic signal: a task whose outputs collapse to a handful of short values across
+    // many calls has a narrow decision space (a label, a yes/no, a priority) — small-model
+    // territory even when the prompt text gives the keyword rules nothing to latch onto.
+    name: "observed-narrow-output",
+    test: (step) => {
+      const s = step.observedStats;
+      if (s && s.callCount >= 20 && s.uniqueOutputCount <= Math.max(6, s.callCount * 0.05) && s.meanOutputTokens <= 40) {
+        return {
+          classification: "simple-judgment",
+          confidence: 0.7,
+          rationale: `Only ${s.uniqueOutputCount} distinct outputs across ${s.callCount} recorded calls (mean ${s.meanOutputTokens.toFixed(0)} output tokens) — a narrow, bounded decision a small model can own.`,
+          signals: ["observed:narrow-output"],
+        };
+      }
+      return null;
+    },
+  },
+  {
     // Documented gap the content-moderation-queue fixture found: a step that assigns a
     // numeric score against a bounded rubric (e.g. a 0-100 toxicity rating) mentions
     // "threshold"/"policy" in its description too — but the score itself is a judgment

@@ -1,6 +1,7 @@
 {
   "name": "routewise",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9,11 +10,14 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "analyze": "tsx src/cli/analyze.ts"
+    "analyze": "tsx src/cli/analyze.ts",
+    "rw": "tsx src/cli/rw.ts",
+    "build:proxy": "tsup --config packages/proxy/tsup.config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
     "next": "16.3.2",
+    "pdf-lib": "^1.17.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zod": "^4.6.5"
@@ -29,6 +33,7 @@
     "eslint-config-next": "16.3.2",
     "jsdom": "^27.0.1",
     "tailwindcss": "^4",
+    "tsup": "^9.0.0",
     "tsx": "^4.23.13",
     "typescript": "^5",
     "vitest": "^3.2.7"

@@ -44,7 +44,11 @@ export class WorkflowCache<T = unknown> {
   private totalLookups = 0;
   private totalHits = 0;
 
-  constructor(private keyFn: (input: unknown) => string = defaultCacheKey) {}
+  /** `maxEntries` bounds memory for long-running processes (oldest-inserted entry is evicted first). Unbounded when omitted. */
+  constructor(
+    private keyFn: (input: unknown) => string = defaultCacheKey,
+    private opts: { maxEntries?: number } = {},
+  ) {}
 
   get(input: unknown): CacheLookup<T> {
     this.totalLookups++;
@@ -70,7 +74,12 @@ export class WorkflowCache<T = unknown> {
       expiresAt: opts.ttlMs !== undefined ? Date.now() + opts.ttlMs : undefined,
       hitCount: 0,
     };
+    this.store.delete(key); // re-insert so Map order tracks recency of write
     this.store.set(key, entry);
+    const max = this.opts.maxEntries;
+    if (max !== undefined) {
+      while (this.store.size > max) this.store.delete(this.store.keys().next().value as string);
+    }
     return entry;
   }
 

@@ -54,6 +54,7 @@ function normalizeStep(raw: unknown, index: number): WorkflowStep {
     outputs: normalizeFields(raw.outputs ?? [], `${id}.outputs`),
     dependsOn: (dependsOn as string[] | undefined) ?? [],
     observedCost: isRecord(raw.observedCost) ? (raw.observedCost as WorkflowStep["observedCost"]) : undefined,
+    observedStats: isRecord(raw.observedStats) ? (raw.observedStats as unknown as WorkflowStep["observedStats"]) : undefined,
   };
 }
 
