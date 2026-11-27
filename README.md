@@ -1,6 +1,9 @@
 # RouteWise
 
 [![CI](https://github.com/ayushsingh82/tokenmax/actions/workflows/ci.yml/badge.svg)](https://github.com/ayushsingh82/tokenmax/actions/workflows/ci.yml)
+![tokens saved](docs/savings-badge.svg)
+
+<sub>The badge above is generated from the bundled sample dataset and states its evidence tier next to the number — see [Evidence tiers](#evidence-tiered-savings).</sub>
 
 **A workflow analyzer that finds out how much of your agent's token spend never needed to happen.**
 
@@ -33,7 +36,7 @@ npm test           # Vitest suite (src/lib/workflow/**, src/app/**)
 
 ### Web dashboard
 
-`npm run dev` serves a dashboard (`src/app/page.tsx` + `src/app/api/analyze`) over the same ingest → classify → route → savings → health pipeline as the CLI: pick a built-in fixture, optionally enable the Claude fallback for unconfident steps, and see the savings breakdown, routing split, and step-by-step table render live. It currently only serves the built-in fixtures — uploading a custom trace goes through the CLI below.
+`npm run dev` serves a landing page at `/` and the dashboard at `/dashboard`. Pick a built-in workflow, a bundled recorded-traffic sample (LangSmith, OpenTelemetry, Claude Code, Codex, OpenAI logs), or upload your own — either a workflow-trace JSON or a raw tool export (`.json` / `.jsonl`, up to 4 MB; raw exports are anonymized first and never stored). You get the savings breakdown, a before/after cost chart, savings split by evidence tier, a per-task evidence table, a local trace history, and shareable HTML / PDF reports plus a README badge.
 
 ### Run the analyzer (CLI)
 
@@ -73,13 +76,77 @@ Workflow health: DECOMPOSITION CANDIDATE
   - 2 step(s) classified deterministic/cacheable are still implemented as model calls: gl_code_line_item, check_approval_threshold.
 ```
 
+## Real traces, shadow mode and the proxy
+
+```bash
+# Parse + anonymize a trace from any supported tool (format is auto-detected)
+npm run rw -- ingest export.jsonl --anonymize --term "Acme Corp" --out calls.json
+
+# Shadow mode: replay the routing policy over recorded calls. Nothing is called or changed.
+npm run rw -- shadow calls.json
+
+# Per-task benchmark: does a cheaper tier reproduce the reference answers? (offline from A/B data, or --live)
+npm run rw -- benchmark calls.json --threshold 0.9
+ANTHROPIC_API_KEY=... npm run rw -- benchmark calls.json --live anthropic --model claude-haiku-5-5 --tier non-frontier
+
+# Evidence-tiered report: HTML, PDF and a README badge
+npm run rw -- report calls.json --html report.html --pdf report.pdf --badge badge.svg
+
+# Regenerate the bundled sample datasets (one synthetic scenario rendered in each tool's real export format)
+npm run rw -- samples
+```
+
+**Supported inputs** (`src/lib/ingest`): LangSmith run exports, OTLP/JSON with OpenInference or OTel GenAI attributes, Claude Code session JSONL, Codex rollout JSONL, and OpenAI logs (request/response pairs, Chat Completions, Responses API, and Batch output joined to its input file). Everything normalizes to one `CallRecord`, which is aggregated per task (`callsToWorkflowTrace`) so the existing classify → route → savings pipeline runs unchanged over real traffic — including two new classifier rules driven by *observed* repeat-input rate and output consistency.
+
+**Anonymization** replaces emails, phone numbers, Luhn-valid card numbers, SSNs, IBANs, IPs, API keys / JWTs / private keys, URLs, and home-directory user names with stable typed placeholders (`<EMAIL_1>`), so repeat structure survives. Personal *names* in free text are best-effort (greetings, "my name is", sign-offs, plus any `--term` you list) — review the output before sharing it.
+
+### The proxy (`packages/proxy`, npm: `routewise-proxy`)
+
+A zero-dependency, OpenAI- and Anthropic-compatible proxy that classifies, caches and routes live calls using the same engine (`src/lib/gateway`) that shadow mode replays — so a shadow report describes what the proxy would really do. Keys pass straight through; its ledger holds routing metadata only. See [`packages/proxy/README.md`](./packages/proxy/README.md).
+
+```bash
+npm run build:proxy
+node packages/proxy/dist/cli.js --mode enforce --shadow-trace calls.json   # acts only on shadow-approved tasks
+```
+
+## Evidence-tiered savings
+
+Every claimed dollar is tagged with how it is known, weakest to strongest:
+
+| Tier | Means |
+| --- | --- |
+| **Modeled** | Classifier + price-table arithmetic. No quality evidence. |
+| **Benchmarked** | Savings still modeled, but a labeled benchmark shows the cheaper tier reproduces reference answers (95% Wilson lower bound ≥ threshold). |
+| **Replayed** | Policy replayed over your recorded traffic with real token counts; cache hits / downgrades checked against what the model actually said. Only the *output-verified* part of a task's savings earns this tier. |
+| **Measured** | Recorded by the live proxy on real requests, from provider-reported usage. |
+| **Invoice-verified** | Measured savings whose actual spend reconciles with the provider invoice within tolerance. (The counterfactual baseline remains an estimate.) |
+
+The headline tier is the strongest tier that still covers at least half of the claimed dollars; a modeled-only estimate is always shown next to the evidence-adjusted number. If replay finds a cache or downgrade *disagreeing* with recorded answers, that task's savings are withheld, not discounted.
+
+Caveats the report states rather than hides: prices are an illustrative tier table (override with your contract rates), a downgraded call is assumed to use the same token counts, "frontier-recorded" benchmark labels measure agreement with current behavior rather than ground truth, and unrecognized model names are priced as frontier.
+
+## Deploying
+
+The app deploys to Vercel as a standard Next.js project (`vercel.json` adds security headers; `ANTHROPIC_API_KEY` is optional — see `.env.example`).
+
+```bash
+npx vercel login
+npx vercel          # preview
+npx vercel --prod
+```
+
+Hosted request bodies are capped at ~4.5 MB; the dashboard enforces 4 MB and points larger traces at the local CLI.
+
 ## Project structure
 
 ```
 src/
   app/
-    page.tsx, dashboard.tsx    # Dashboard UI
+    page.tsx                   # Landing page (numbers computed from the bundled sample at build time)
+    dashboard.tsx, dashboard/  # Dashboard UI + /dashboard route; _components/ = chart, evidence panel, history, error boundary
+    error.tsx, global-error.tsx, not-found.tsx
     api/analyze/route.ts       # Server-side pipeline endpoint the dashboard calls
+    api/report/route.ts        # HTML / PDF / JSON / badge reports
   lib/workflow/
     types.ts, ingest.ts       # WorkflowTrace ingestion, validation, topological ordering
     classify.ts                # Rules-based task classifier
@@ -91,14 +158,22 @@ src/
     savings.ts                 # Naive/current/recommended cost comparison + report formatting
     health.ts                  # Flags workflows still running mostly through a model
     fixtures/                  # Example workflows: AP invoicing, support-ticket triage, content moderation
-  cli/analyze.ts                # Product Wedge A: the analyzer CLI
+  lib/ingest/                  # Trace adapters, anonymizer, per-task aggregation, deterministic sample-data generator
+  lib/gateway/                 # Decision engine shared by the live proxy and shadow replay
+  lib/shadow/                  # Shadow mode: chronological replay + per-task verdicts
+  lib/benchmark/               # Per-task benchmarking (Phase 2.4): scoring, Wilson bounds, live + recorded candidates
+  lib/report/                  # Evidence tiers, HTML / PDF reports, README badge
+  lib/analysis/                # Source resolution shared by the API routes
+  cli/analyze.ts, cli/rw.ts    # Analyzer CLI; ingest / shadow / benchmark / report CLI
+packages/proxy/                # routewise-proxy npm package (zero runtime deps)
+samples/                       # Synthetic trace exports in each tool's real format (+ anonymized/)
 ```
 
 Each module's `*.test.ts` file is its unit test suite (Vitest, `npm test`).
 
 ## Status & roadmap
 
-Phases 0–5's non-UI core are built and tested; see [`PLAN.md`](./PLAN.md) for the full phase-by-phase build log, what's still open (per-task benchmarking against real labeled data, real trace ingestion), and the product-wedge decision. [`COMPETITORS.md`](./COMPETITORS.md) has the competitive landscape scan, including the closest comparable product.
+Phases 0–5's non-UI core are built and tested; see [`PLAN.md`](./PLAN.md) for the full phase-by-phase build log, what's still open (running the live benchmark and proxy against a real provider account — see PLAN.md), and the product-wedge decision. [`COMPETITORS.md`](./COMPETITORS.md) has the competitive landscape scan, including the closest comparable product.
 
 ## Background
 
